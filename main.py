@@ -40,7 +40,7 @@ from monitor_thread import MonitorThread
 from region_selector import RegionSelector
 
 APP_NAME    = "chan Tools for TBH"
-VERSION     = "1.0.0"
+VERSION     = "1.0.1"
 GITHUB_OWNER = "chanS271999"
 GITHUB_REPO  = "chan-tools-tbh"
 
