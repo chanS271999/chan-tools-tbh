@@ -28,7 +28,11 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSlider,
     QSpinBox,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -40,9 +44,19 @@ from monitor_thread import MonitorThread
 from region_selector import RegionSelector
 
 APP_NAME    = "chan Tools for TBH"
-VERSION     = "1.0.2"
+VERSION     = "1.0.4"
 GITHUB_OWNER = "chanS271999"
 GITHUB_REPO  = "chan-tools-tbh"
+
+CHANGELOG = {
+    "1.0.4": (
+        "・音量調整を追加（設定タブ）\n"
+        "・テスト再生ボタンを追加\n"
+        "・リスト行ハイライトをグレーに変更\n"
+        "・Discord ON/OFFをリスト上でトグル切り替え可能に\n"
+        "・アップデート後の初回起動時に変更点を表示"
+    ),
+}
 
 DEFAULT_RARITIES = [
     ("コズミック",     "#B266FF"),
@@ -239,15 +253,19 @@ _winmm = ctypes.windll.winmm
 
 class SoundPlayer:
     _SLOTS = 8
-    def __init__(self): self._idx = 0
+    def __init__(self): self._idx = 0; self.volume = 80  # 0-100
     def _mci(self, cmd): return _winmm.mciSendStringW(cmd, None, 0, None)
     def _alias(self, i): return f"tbhsnd{i}"
+    def _apply_volume(self):
+        vol = int(self.volume / 100 * 0xFFFF)
+        _winmm.waveOutSetVolume(None, vol | (vol << 16))
     def play(self, path: str) -> bool:
         path = os.path.abspath(path).replace("/", "\\")
         i = self._idx % self._SLOTS; self._idx += 1
         alias = self._alias(i)
         self._mci(f"close {alias}")
         if self._mci(f'open "{path}" alias {alias}') != 0: return False
+        self._apply_volume()
         self._mci(f"play {alias}"); return True
     def stop_all(self):
         for i in range(self._SLOTS): self._mci(f"close {self._alias(i)}")
@@ -482,10 +500,61 @@ class RuleDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+class _RowDelegate(QStyledItemDelegate):
+    _HOVER    = QColor("#323232")
+    _SELECTED = QColor("#4a4a4a")
+    _DEFAULT  = QColor("#1e1e1e")
+
+    def paint(self, painter, option, index):
+        table = self.parent()
+        is_sel   = bool(option.state & QStyle.StateFlag.State_Selected)
+        is_hover = hasattr(table, "_hover_row") and index.row() == table._hover_row
+
+        opt = QStyleOptionViewItem(option)
+        opt.state &= ~(QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_MouseOver | QStyle.StateFlag.State_HasFocus)
+        opt.palette.setColor(opt.palette.ColorRole.Text, QColor("#dddddd"))
+
+        item_bg = index.data(Qt.ItemDataRole.BackgroundRole)
+        if item_bg is not None:
+            painter.fillRect(opt.rect, item_bg)
+        elif is_sel:
+            painter.fillRect(opt.rect, self._SELECTED)
+        elif is_hover:
+            painter.fillRect(opt.rect, self._HOVER)
+        else:
+            painter.fillRect(opt.rect, self._DEFAULT)
+
+        super().paint(painter, opt, index)
+
+
+class HoverTableWidget(QTableWidget):
+    def __init__(self, rows, cols, parent=None):
+        super().__init__(rows, cols, parent)
+        self._hover_row = -1
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        self.setItemDelegate(_RowDelegate(self))
+
+    def mouseMoveEvent(self, event):
+        idx = self.indexAt(event.pos())
+        row = idx.row() if idx.isValid() else -1
+        if row != self._hover_row:
+            self._hover_row = row
+            self.viewport().update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        if self._hover_row != -1:
+            self._hover_row = -1
+            self.viewport().update()
+        super().leaveEvent(event)
+
+
+# ---------------------------------------------------------------------------
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(APP_NAME)
+        self.setWindowTitle(f"{APP_NAME}  v{VERSION}")
         self.setMinimumSize(800, 680)
         self.rules: list[Rule] = []
         self.region: Optional[QRect] = None
@@ -495,10 +564,21 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._load_settings()
         self._append_log(f"chan Tools for TBH v{VERSION} 起動完了")
+        QTimer.singleShot(800, self._show_changelog_if_updated)
         QTimer.singleShot(3000, self._check_update)
         self._update_timer = QTimer()
         self._update_timer.timeout.connect(self._check_update)
         self._update_timer.start(10 * 60 * 1000)  # 10分ごと
+
+    def _show_changelog_if_updated(self):
+        if self._last_version != VERSION and VERSION in CHANGELOG:
+            msg = QMessageBox(self)
+            msg.setWindowTitle(f"v{VERSION} に更新されました")
+            msg.setText(CHANGELOG[VERSION])
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.exec()
+        self._last_version = VERSION
+        self._save_settings()
 
     def _check_update(self):
         self._update_checker = UpdateChecker()
@@ -547,7 +627,7 @@ class MainWindow(QMainWindow):
 
         # テーブル（8列）
         # 色 | レアリティ | カラーコード | サウンドファイル | クールダウン | Discord | カラー取得 | 削除
-        self._table = QTableWidget(0, 8)
+        self._table = HoverTableWidget(0, 8)
         self._table.setHorizontalHeaderLabels(["色", "レアリティ", "カラーコード", "サウンドファイル", "クールダウン", "Discord", "カラー取得", ""])
         self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         for col, w in [(0,40),(1,100),(2,90),(4,76),(5,60),(6,76),(7,46)]:
@@ -556,12 +636,9 @@ class MainWindow(QMainWindow):
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.verticalHeader().setVisible(False)
         self._table.setAlternatingRowColors(False)
-        self._table.setMouseTracking(True)
         self._table.setStyleSheet(
-            "QTableWidget{background:#1e1e1e;gridline-color:#2e2e2e;color:#ddd;}"
+            "QTableWidget{background:#1e1e1e;gridline-color:#2e2e2e;}"
             "QTableWidget::item{padding:2px;}"
-            "QTableWidget::item:hover{background:#2a3a50;}"
-            "QTableWidget::item:selected{background:#1a4a7a;color:#fff;}"
             "QHeaderView::section{background:#252525;color:#aaa;border:none;padding:4px;border-bottom:1px solid #3a3a3a;}"
         )
         self._table.doubleClicked.connect(lambda idx: self._edit_rule(idx.row()))
@@ -610,11 +687,57 @@ class MainWindow(QMainWindow):
         id_row.addWidget(self._discord_id_edit); dl.addLayout(id_row)
         vbox.addWidget(discord_group)
 
+        volume_group = QGroupBox("音量")
+        vvbox = QVBoxLayout(volume_group); vvbox.setSpacing(8)
+
+        vol_row = QHBoxLayout()
+        vol_row.addWidget(QLabel("音量:"))
+        self._volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self._volume_slider.setRange(0, 100)
+        self._volume_slider.setValue(self._player.volume)
+        self._volume_lbl = QLabel(f"{self._player.volume}%"); self._volume_lbl.setFixedWidth(36)
+        self._volume_slider.valueChanged.connect(self._on_volume_changed)
+        vol_row.addWidget(self._volume_slider); vol_row.addWidget(self._volume_lbl)
+        vvbox.addLayout(vol_row)
+
+        test_row = QHBoxLayout()
+        test_row.addWidget(QLabel("テスト音源:"))
+        self._test_sound_edit = QLineEdit(); self._test_sound_edit.setPlaceholderText("MP3 / WAV / OGG を選択")
+        test_row.addWidget(self._test_sound_edit)
+        browse_btn = QPushButton("参照"); browse_btn.setFixedWidth(54); browse_btn.setStyleSheet(_BTN)
+        browse_btn.clicked.connect(self._browse_test_sound)
+        test_row.addWidget(browse_btn)
+        play_btn = QPushButton("▶ テスト再生"); play_btn.setStyleSheet(_BTN_ACCENT)
+        play_btn.clicked.connect(self._play_test_sound)
+        test_row.addWidget(play_btn)
+        vvbox.addLayout(test_row)
+        vbox.addWidget(volume_group)
+
         vbox.addStretch()
-        save_row = QHBoxLayout(); save_row.addStretch()
+        save_row = QHBoxLayout()
+        ver_lbl = QLabel(f"v{VERSION}"); ver_lbl.setStyleSheet("color:#555;font-size:11px;")
+        save_row.addWidget(ver_lbl); save_row.addStretch()
         save_btn = QPushButton("設定を保存"); save_btn.setFixedWidth(130); save_btn.setStyleSheet(_BTN_ACCENT)
         save_btn.clicked.connect(self._save_with_dialog)
         save_row.addWidget(save_btn); vbox.addLayout(save_row)
+
+    def _on_volume_changed(self, val: int):
+        self._player.volume = val
+        self._volume_lbl.setText(f"{val}%")
+
+    def _browse_test_sound(self):
+        path, _ = QFileDialog.getOpenFileName(self, "テスト音源を選択", "", "Audio Files (*.mp3 *.wav *.ogg)")
+        if path:
+            self._test_sound_edit.setText(path)
+
+    def _play_test_sound(self):
+        path = self._test_sound_edit.text().strip()
+        if not path:
+            QMessageBox.warning(self, "未選択", "テスト音源を選択してください。"); return
+        if not os.path.isfile(path):
+            QMessageBox.warning(self, "エラー", f"ファイルが見つかりません:\n{path}"); return
+        if not self._player.play(path):
+            QMessageBox.warning(self, "再生エラー", "ファイルを開けませんでした。")
 
     def _save_with_dialog(self):
         self._save_settings()
@@ -886,6 +1009,8 @@ class MainWindow(QMainWindow):
             "interval_ms": self._interval_spin.value(),
             "region": [self.region.x(), self.region.y(), self.region.width(), self.region.height()] if self.region else None,
             "discord_id": self._discord_id_edit.text().strip(),
+            "volume": self._player.volume,
+            "last_version": VERSION,
             "rules": [
                 {"color": r.color.name(), "sound_path": r.sound_path, "cooldown": r.cooldown,
                  "ocr_enabled": r.ocr_enabled, "tolerance": r.tolerance,
@@ -899,8 +1024,8 @@ class MainWindow(QMainWindow):
         except Exception: pass
 
     def _load_settings(self):
+        self._last_version = VERSION
         if not os.path.exists(SETTINGS_PATH):
-            # 初回起動: デフォルトレアリティを表示
             for name, hex_color in DEFAULT_RARITIES:
                 self.rules.append(Rule(color=QColor(hex_color), rarity_name=name))
             self._refresh_table()
@@ -908,8 +1033,12 @@ class MainWindow(QMainWindow):
         try:
             with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            self._last_version = data.get("last_version", "0.0.0")
             self._interval_spin.setValue(data.get("interval_ms", 500))
             if data.get("discord_id"): self._discord_id_edit.setText(data["discord_id"])
+            vol = data.get("volume", 80)
+            self._player.volume = vol
+            self._volume_slider.setValue(vol)
             r = data.get("region")
             if r:
                 self.region = QRect(r[0], r[1], r[2], r[3])
