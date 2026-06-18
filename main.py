@@ -40,7 +40,7 @@ from monitor_thread import MonitorThread
 from region_selector import RegionSelector
 
 APP_NAME    = "chan Tools for TBH"
-VERSION     = "1.0.1"
+VERSION     = "1.0.2"
 GITHUB_OWNER = "chanS271999"
 GITHUB_REPO  = "chan-tools-tbh"
 
@@ -64,6 +64,19 @@ else:
     _RES_DIR = _APP_DIR
 
 SETTINGS_PATH = os.path.join(_APP_DIR, "settings.json")
+
+_BTN = (
+    "QPushButton{background:#383838;color:#ddd;border:1px solid #555;"
+    "border-radius:4px;padding:4px 10px;}"
+    "QPushButton:hover{background:#484848;}"
+    "QPushButton:pressed{background:#282828;}"
+)
+_BTN_ACCENT = (
+    "QPushButton{background:#1565C0;color:#fff;border:none;"
+    "border-radius:4px;padding:4px 10px;}"
+    "QPushButton:hover{background:#1976D2;}"
+    "QPushButton:pressed{background:#0D47A1;}"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +496,9 @@ class MainWindow(QMainWindow):
         self._load_settings()
         self._append_log(f"chan Tools for TBH v{VERSION} 起動完了")
         QTimer.singleShot(3000, self._check_update)
+        self._update_timer = QTimer()
+        self._update_timer.timeout.connect(self._check_update)
+        self._update_timer.start(10 * 60 * 1000)  # 10分ごと
 
     def _check_update(self):
         self._update_checker = UpdateChecker()
@@ -512,18 +528,21 @@ class MainWindow(QMainWindow):
         region_frame.setFrameShape(QFrame.Shape.StyledPanel)
         region_frame.setStyleSheet("QFrame{border:1px solid #3a3a3a;border-radius:5px;padding:6px;background:#2c2c2c;}")
         rh = QHBoxLayout(region_frame)
-        lbl = QLabel("監視範囲:"); lbl.setStyleSheet("color:#aaa;background:transparent;"); rh.addWidget(lbl)
-        self._region_label = QLabel("未設定  ―  「範囲を選択」ボタンでドラッグ指定してください")
-        self._region_label.setStyleSheet("color:rgba(255,255,255,0.45);background:transparent;")
+        lbl = QLabel("監視範囲:"); lbl.setStyleSheet("color:#bbb;background:transparent;font-weight:bold;"); rh.addWidget(lbl)
+        self._region_label = QLabel("未設定  —  「範囲を選択」でドラッグ指定してください")
+        self._region_label.setStyleSheet("color:#888;background:transparent;")
         rh.addWidget(self._region_label, 1)
-        self._select_btn = QPushButton("範囲を選択"); self._select_btn.setFixedWidth(110)
+        self._select_btn = QPushButton("📐 範囲を選択"); self._select_btn.setFixedWidth(120)
+        self._select_btn.setStyleSheet(_BTN)
         self._select_btn.clicked.connect(self._start_region_select); rh.addWidget(self._select_btn)
         vbox.addWidget(region_frame)
 
         # ルールヘッダー
         rule_header = QHBoxLayout()
-        rule_header.addWidget(QLabel("検知ルール:")); rule_header.addStretch()
-        add_btn = QPushButton("＋ ルール追加"); add_btn.clicked.connect(self._add_rule)
+        rule_lbl = QLabel("検知ルール:"); rule_lbl.setStyleSheet("color:#bbb;font-weight:bold;")
+        rule_header.addWidget(rule_lbl); rule_header.addStretch()
+        add_btn = QPushButton("＋ ルール追加"); add_btn.setStyleSheet(_BTN_ACCENT)
+        add_btn.clicked.connect(self._add_rule)
         rule_header.addWidget(add_btn); vbox.addLayout(rule_header)
 
         # テーブル（8列）
@@ -536,7 +555,15 @@ class MainWindow(QMainWindow):
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.verticalHeader().setVisible(False)
-        self._table.setAlternatingRowColors(True)
+        self._table.setAlternatingRowColors(False)
+        self._table.setMouseTracking(True)
+        self._table.setStyleSheet(
+            "QTableWidget{background:#1e1e1e;gridline-color:#2e2e2e;color:#ddd;}"
+            "QTableWidget::item{padding:2px;}"
+            "QTableWidget::item:hover{background:#2a3a50;}"
+            "QTableWidget::item:selected{background:#1a4a7a;color:#fff;}"
+            "QHeaderView::section{background:#252525;color:#aaa;border:none;padding:4px;border-bottom:1px solid #3a3a3a;}"
+        )
         self._table.doubleClicked.connect(lambda idx: self._edit_rule(idx.row()))
         vbox.addWidget(self._table)
 
@@ -547,7 +574,8 @@ class MainWindow(QMainWindow):
         self._interval_spin.setRange(100, 10000); self._interval_spin.setValue(500); self._interval_spin.setSuffix(" ms")
         self._interval_spin.setToolTip("検知間隔=何msおきに画面をスキャン\nクールダウン=鳴らした後の待機時間")
         ctrl.addWidget(self._interval_spin); ctrl.addStretch()
-        self._check_btn = QPushButton("今すぐ検証"); self._check_btn.setFixedSize(90, 36)
+        self._check_btn = QPushButton("今すぐ検証"); self._check_btn.setFixedSize(100, 34)
+        self._check_btn.setStyleSheet(_BTN)
         self._check_btn.setToolTip("現在の範囲をキャプチャし各ルールの色を検証")
         self._check_btn.clicked.connect(self._check_now); ctrl.addWidget(self._check_btn)
         self._toggle_btn = QPushButton("監視開始"); self._toggle_btn.setFixedSize(110, 36)
@@ -555,8 +583,10 @@ class MainWindow(QMainWindow):
         ctrl.addWidget(self._toggle_btn); vbox.addLayout(ctrl)
 
         # ログ
-        log_header = QHBoxLayout(); log_header.addWidget(QLabel("ログ:")); log_header.addStretch()
-        clear_btn = QPushButton("クリア"); clear_btn.setFixedWidth(60)
+        log_header = QHBoxLayout()
+        log_lbl = QLabel("ログ:"); log_lbl.setStyleSheet("color:#bbb;font-weight:bold;")
+        log_header.addWidget(log_lbl); log_header.addStretch()
+        clear_btn = QPushButton("クリア"); clear_btn.setFixedWidth(64); clear_btn.setStyleSheet(_BTN)
         clear_btn.clicked.connect(lambda: self._log_widget.clear()); log_header.addWidget(clear_btn)
         vbox.addLayout(log_header)
         self._log_widget = QPlainTextEdit(); self._log_widget.setReadOnly(True)
@@ -578,23 +608,22 @@ class MainWindow(QMainWindow):
         self._discord_id_edit.setPlaceholderText("例: 123456789012345678  （18桁の数字）")
         self._discord_id_edit.setToolTip("Discordのユーザーメニュー「IDをコピー」で取得できます")
         id_row.addWidget(self._discord_id_edit); dl.addLayout(id_row)
-
-        test_row = QHBoxLayout(); test_row.addStretch()
-        test_btn = QPushButton("テスト通知を送信"); test_btn.setFixedWidth(150)
-        test_btn.clicked.connect(self._test_discord)
-        test_row.addWidget(test_btn); dl.addLayout(test_row)
         vbox.addWidget(discord_group)
-
-        fmt_group = QGroupBox("通知フォーマット")
-        fl = QVBoxLayout(fmt_group)
-        fl.addWidget(QLabel('<@Discord ID>  `{レアリティ}のアイテムをドロップしました［HH:MM:SS］`'))
-        vbox.addWidget(fmt_group)
 
         vbox.addStretch()
         save_row = QHBoxLayout(); save_row.addStretch()
-        save_btn = QPushButton("設定を保存"); save_btn.setFixedWidth(120)
-        save_btn.clicked.connect(lambda: (self._save_settings(), self._append_log("設定を保存しました")))
+        save_btn = QPushButton("設定を保存"); save_btn.setFixedWidth(130); save_btn.setStyleSheet(_BTN_ACCENT)
+        save_btn.clicked.connect(self._save_with_dialog)
         save_row.addWidget(save_btn); vbox.addLayout(save_row)
+
+    def _save_with_dialog(self):
+        self._save_settings()
+        self._append_log("設定を保存しました")
+        msg = QMessageBox(self)
+        msg.setWindowTitle("保存完了")
+        msg.setText("設定を保存しました。")
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.exec()
 
     # ── ログ ─────────────────────────────────────────────────────────────
     def _append_log(self, msg: str):
@@ -638,6 +667,22 @@ class MainWindow(QMainWindow):
             if 0 <= r < len(self.rules): self.rules[r] = rule; self._refresh_table()
         dlg.rule_accepted.connect(_apply); dlg.show(); dlg.activateWindow()
 
+    @staticmethod
+    def _style_discord_btn(btn: QPushButton, on: bool):
+        if on:
+            btn.setStyleSheet("QPushButton{background:#43a047;color:#fff;border:none;border-radius:3px;font-size:11px;}QPushButton:hover{background:#388e3c;}")
+        else:
+            btn.setStyleSheet("QPushButton{background:#444;color:#888;border:none;border-radius:3px;font-size:11px;}QPushButton:hover{background:#555;}")
+
+    def _toggle_discord(self, row: int):
+        if not (0 <= row < len(self.rules)): return
+        self.rules[row].discord_notify = not self.rules[row].discord_notify
+        btn = self._table.cellWidget(row, 5)
+        if btn:
+            on = self.rules[row].discord_notify
+            btn.setText("ON" if on else "OFF")
+            self._style_discord_btn(btn, on)
+
     def _delete_rule(self, row: int):
         if not (0 <= row < len(self.rules)): return
         name = self.rules[row].rarity_name or self.rules[row].color.name().upper()
@@ -656,7 +701,10 @@ class MainWindow(QMainWindow):
             fname = os.path.basename(rule.sound_path) if rule.sound_path else "（未設定）"
             self._table.setItem(i, 3, QTableWidgetItem(fname))
             self._table.setItem(i, 4, QTableWidgetItem(f"{rule.cooldown}秒"))
-            self._table.setItem(i, 5, QTableWidgetItem("ON" if rule.discord_notify else "OFF"))
+            dc_btn = QPushButton("ON" if rule.discord_notify else "OFF"); dc_btn.setFixedHeight(26)
+            self._style_discord_btn(dc_btn, rule.discord_notify)
+            dc_btn.clicked.connect(lambda _, r=i: self._toggle_discord(r))
+            self._table.setCellWidget(i, 5, dc_btn)
             pick_btn = QPushButton("📷 取得"); pick_btn.setFixedHeight(26)
             pick_btn.setToolTip("範囲を選択してこのルールの色を取得")
             pick_btn.clicked.connect(lambda _, r=i: self._pick_color_for_rule(r))
