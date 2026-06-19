@@ -27,6 +27,7 @@ py -3 -m PyInstaller ^
     --hidden-import PIL ^
     --hidden-import winrt ^
     --collect-all winrt ^
+    --collect-all pypresence ^
     main.py
 
 if %errorlevel% neq 0 (

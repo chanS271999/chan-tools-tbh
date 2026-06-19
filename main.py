@@ -44,9 +44,10 @@ from monitor_thread import MonitorThread
 from region_selector import RegionSelector
 
 APP_NAME    = "chan Tools for TBH"
-VERSION     = "1.0.4"
+VERSION      = "1.0.5"
 GITHUB_OWNER = "chanS271999"
 GITHUB_REPO  = "chan-tools-tbh"
+_RPC_CLIENT_ID = "1517490236521975848"
 
 CHANGELOG = {
     "1.0.4": (
@@ -55,6 +56,11 @@ CHANGELOG = {
         "・リスト行ハイライトをグレーに変更\n"
         "・Discord ON/OFFをリスト上でトグル切り替え可能に\n"
         "・アップデート後の初回起動時に変更点を表示"
+    ),
+    "1.0.5": (
+        "・Discord Rich Presence 対応（起動中のステータスに表示）\n"
+        "・Discord通知のメッセージ形式を変更\n"
+        "　`［HH:MM:SS］レアリティのアイテムをドロップしました` <@ID>"
     ),
 }
 
@@ -91,6 +97,61 @@ _BTN_ACCENT = (
     "QPushButton:hover{background:#1976D2;}"
     "QPushButton:pressed{background:#0D47A1;}"
 )
+
+
+# ---------------------------------------------------------------------------
+class DiscordRPC:
+    def __init__(self):
+        self._rpc = None
+        self._connected = False
+        self._monitoring_start: Optional[int] = None
+
+    def connect(self):
+        try:
+            from pypresence import Presence
+            self._rpc = Presence(_RPC_CLIENT_ID)
+            self._rpc.connect()
+            self._connected = True
+            self._update()
+        except Exception:
+            self._connected = False
+
+    def set_monitoring(self, active: bool, rule_count: int = 0):
+        self._monitoring_start = int(time.time()) if active else None
+        self._update(active, rule_count)
+
+    def _update(self, monitoring: bool = False, rule_count: int = 0):
+        if not self._connected or self._rpc is None:
+            return
+        try:
+            if monitoring:
+                self._rpc.update(
+                    details="監視中",
+                    state=f"ルール {rule_count} 件",
+                    start=self._monitoring_start,
+                    large_text="chan Tools for TBH",
+                )
+            else:
+                self._rpc.update(
+                    details="待機中",
+                    large_text="chan Tools for TBH",
+                )
+        except Exception:
+            self._connected = False
+
+    def keepalive(self):
+        if self._connected:
+            self._update(self._monitoring_start is not None, 0)
+        else:
+            self.connect()
+
+    def close(self):
+        try:
+            if self._rpc:
+                self._rpc.close()
+        except Exception:
+            pass
+        self._connected = False
 
 
 # ---------------------------------------------------------------------------
@@ -561,11 +622,16 @@ class MainWindow(QMainWindow):
         self._monitor_thread: Optional[MonitorThread] = None
         self._player = SoundPlayer()
         self._color_pick_target_row: int = -1
+        self._rpc = DiscordRPC()
         self._build_ui()
         self._load_settings()
         self._append_log(f"chan Tools for TBH v{VERSION} 起動完了")
         QTimer.singleShot(800, self._show_changelog_if_updated)
+        QTimer.singleShot(2000, self._rpc.connect)
         QTimer.singleShot(3000, self._check_update)
+        self._rpc_timer = QTimer()
+        self._rpc_timer.timeout.connect(self._rpc.keepalive)
+        self._rpc_timer.start(30_000)
         self._update_timer = QTimer()
         self._update_timer.timeout.connect(self._check_update)
         self._update_timer.start(10 * 60 * 1000)  # 10分ごと
@@ -930,6 +996,7 @@ class MainWindow(QMainWindow):
         self._set_toggle_style(True)
         self._select_btn.setEnabled(False); self._interval_spin.setEnabled(False)
         self._append_log("監視開始")
+        self._rpc.set_monitoring(True, len(self.rules))
 
     def _stop_monitoring(self):
         if self._monitor_thread:
@@ -937,6 +1004,7 @@ class MainWindow(QMainWindow):
         self._set_toggle_style(False)
         self._select_btn.setEnabled(True); self._interval_spin.setEnabled(True)
         self._append_log("監視停止")
+        self._rpc.set_monitoring(False)
 
     def _on_color_matched(self, rule_index: int):
         if rule_index >= len(self.rules): return
@@ -962,8 +1030,8 @@ class MainWindow(QMainWindow):
         if not _WEBHOOK_URL:
             self._append_log("Discord: Webhook URLが設定されていません"); return
         try:
-            mention = f"<@{discord_id}> " if discord_id else ""
-            content = f"{mention}`{rarity_name}のアイテムをドロップしました［{ts}］`"
+            mention = f" <@{discord_id}>" if discord_id else ""
+            content = f"`［{ts}］{rarity_name}のアイテムをドロップしました`{mention}"
             data = json.dumps({"content": content}).encode("utf-8")
             req = urllib.request.Request(_WEBHOOK_URL, data=data,
                 headers={"Content-Type": "application/json",
@@ -1062,7 +1130,8 @@ class MainWindow(QMainWindow):
             self._append_log(f"設定読み込みエラー: {e}")
 
     def closeEvent(self, event):
-        self._stop_monitoring(); self._player.stop_all(); self._save_settings(); event.accept()
+        self._stop_monitoring(); self._player.stop_all()
+        self._rpc.close(); self._save_settings(); event.accept()
 
 
 # ---------------------------------------------------------------------------
